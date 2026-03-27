@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Udemy Subtitles Export",
+  "version": "1.0",
+  "description": "Download all subtitles from a Udemy course as JSON.",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.udemy.com/*",
+    "*://*.udemycdn.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.udemy.com/*", "*://udemy.com/*", "*://*.udemy.com/course/*", "*://*.udemy.com/*/learn/lecture/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
