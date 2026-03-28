@@ -70,11 +70,24 @@ function extractCourseId() {
     return null;
 }
 
+function extractCourseTitle() {
+    console.log("[Content Script] Попытка найти Course Title...");
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    if (ogTitle && ogTitle.content) {
+        return ogTitle.content.replace(' | Udemy', '').replace(' | Free Tutorial', '').trim();
+    }
+    if (document.title) {
+        return document.title.split('|')[0].trim();
+    }
+    return "udemy_course";
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("[Content Script] Получено сообщение:", message);
     if (message.type === 'GET_COURSE_ID') {
         const id = extractCourseId();
-        sendResponse({ courseId: id });
+        const title = extractCourseTitle();
+        sendResponse({ courseId: id, courseTitle: title });
     }
     return true; // Keep the message channel open for sendResponse
 });

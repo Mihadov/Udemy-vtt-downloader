@@ -4,7 +4,7 @@ let isDownloading = false;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("[Background] Получено сообщение:", message);
-    
+
     if (message.type === 'START_DOWNLOAD') {
         if (isDownloading) {
             console.warn("[Background] Игнорируем запрос: скачивание уже идет!");
@@ -12,7 +12,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
         }
         sendResponse({ status: "started" });
-        startDownloadProcess(message.courseId);
+        startDownloadProcess(message.courseId, message.courseTitle, message.format, message.courseOrigin);
     }
 });
 
@@ -25,13 +25,13 @@ function sendProgress(text, percent = undefined) {
 
 function sendError(text) {
     console.error(`[Background Error] ${text}`);
-    chrome.runtime.sendMessage({ type: 'ERROR', text }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'ERROR', text }).catch(() => { });
     isDownloading = false;
 }
 
 function sendDone(text) {
     console.log(`[Background Done] ${text}`);
-    chrome.runtime.sendMessage({ type: 'DONE', text }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'DONE', text }).catch(() => { });
     isDownloading = false;
 }
 
@@ -46,27 +46,27 @@ function bufferToBase64(buffer) {
     return btoa(binary);
 }
 
-async function startDownloadProcess(courseId) {
+async function startDownloadProcess(courseId, courseTitle = "udemy_course", format = "md", courseOrigin = "https://www.udemy.com") {
     isDownloading = true;
-    console.log(`[Background] === НАЧАЛО ПРОЦЕССА СКАЧИВАНИЯ ДЛЯ КУРСА ${courseId} ===`);
-    
+    console.log(`[Background] === НАЧАЛО ПРОЦЕССА СКАЧИВАНИЯ ДЛЯ КУРСА ${courseId} (${courseTitle}) ===`);
+
     try {
         sendProgress("Получение структуры курса (curriculum)...", 0);
-        
+
         // 1. Получаем список лекций курса
-        const curriculumUrl = `https://www.udemy.com/api-2.0/courses/${courseId}/subscriber-curriculum-items/?page_size=1000&fields[lecture]=title,asset&fields[asset]=captions`;
+        const curriculumUrl = `${courseOrigin}/api-2.0/courses/${courseId}/subscriber-curriculum-items/?page_size=1000&fields[lecture]=title,asset&fields[asset]=captions`;
         console.log(`[Background] Делаем запрос: ${curriculumUrl}`);
-        
+
         const currResp = await fetch(curriculumUrl);
         console.log(`[Background] Ответ curriculum: Status ${currResp.status}`);
-        
+
         if (!currResp.ok) {
             if (currResp.status === 403) {
                 throw new Error("Доступ запрещен (HTTP 403). Убедитесь, что вы авторизованы на Udemy и купили этот курс.");
             }
             throw new Error(`Ошибка API curriculum: HTTP ${currResp.status}`);
         }
-        
+
         const currData = await currResp.json();
         console.log(`[Background] Структура курса успешно: получено ${currData.results?.length} элементов.`);
 
@@ -87,10 +87,10 @@ async function startDownloadProcess(courseId) {
                     // Ищем английские 'en_US' или 'en', иначе берем первые доступные
                     let targetCaption = asset.captions.find(c => c.locale_id.startsWith('en')) || asset.captions[0];
                     let captionUrl = targetCaption.url;
-                    
+
                     // Иногда URL бывает относительным или без протокола, но Udemy обычно отдает полный
                     console.log(`[Background] Лекция ${lectureNum} ("${item.title}") имеет субтитры: ${targetCaption.locale_id}`);
-                    
+
                     lecturesWithCaptions.push({
                         num: lectureNum,
                         title: item.title,
@@ -117,19 +117,19 @@ async function startDownloadProcess(courseId) {
         for (const lec of lecturesWithCaptions) {
             const percent = Math.round(5 + (downloadedCount / totalCaptions) * 90);
             sendProgress(`Скачивание субтитров (${downloadedCount + 1}/${totalCaptions}): "${lec.title}"`, percent);
-            console.log(`[Background] Загружаем VTT для лекции ${lec.num}: ${lec.captionUrl.substring(0,60)}...`);
-            
+            console.log(`[Background] Загружаем VTT для лекции ${lec.num}: ${lec.captionUrl.substring(0, 60)}...`);
+
             try {
                 const vttResp = await fetch(lec.captionUrl);
                 if (!vttResp.ok) throw new Error(`HTTP ${vttResp.status}`);
-                
+
                 const vttText = await vttResp.text();
                 // Логируем первые 50 символов VTT для отладки
                 console.log(`[Background] VTT скачан (Длина: ${vttText.length}). Пример содержимого:`, vttText.substring(0, 50).replace(/\n/g, '\\n'));
-                
+
                 // Очистка от таймкодов
                 const cleanText = cleanVttContent(vttText);
-                
+
                 finalResults.push({
                     num: lec.num,
                     title: lec.title,
@@ -151,24 +151,45 @@ async function startDownloadProcess(courseId) {
             downloadedCount++;
         }
 
-        // 4. Формируем JSON-файл и скачиваем
+        // 4. Формируем итоговый файл
         sendProgress('Генерация и сохранение файла...', 98);
-        console.log("[Background] Все файлы скачаны. Подготовка JSON...");
+        console.log(`[Background] Все файлы скачаны. Подготовка формата ${format}...`);
 
-        const jsonString = JSON.stringify(finalResults, null, 2);
-        
+        let finalString = "";
+        let mimeType = "";
+        let extension = "";
+
+        if (format === 'md') {
+            finalString = `# ${courseTitle}\n\n`;
+            for (const lec of finalResults) {
+                finalString += `## ${lec.num}: ${lec.title}\n\n`;
+                if (lec.error) {
+                    finalString += `*Ошибка загрузки: ${lec.error}*\n\n`;
+                } else {
+                    finalString += `${lec.text}\n\n`;
+                }
+            }
+            mimeType = "text/markdown";
+            extension = "md";
+        } else {
+            finalString = JSON.stringify(finalResults, null, 2);
+            mimeType = "application/json";
+            extension = "json";
+        }
+
         // Преобразуем строку в ArrayBuffer (UTF-8) -> Base64
-        console.log(`[Background] Конвертируем строку (длина: ${jsonString.length}) в Base64 Data URL...`);
+        console.log(`[Background] Конвертируем строку (длина: ${finalString.length}) в Base64 Data URL...`);
         const encoder = new TextEncoder();
-        const utf8Bytes = encoder.encode(jsonString);
+        const utf8Bytes = encoder.encode(finalString);
         const base64Str = bufferToBase64(utf8Bytes);
-        const dataUrl = 'data:application/json;base64,' + base64Str;
+        const dataUrl = `data:${mimeType};base64,` + base64Str;
 
         console.log(`[Background] Инициация скачивания файла (размер base64: ${base64Str.length} байт)...`);
-        
+
+        const safeTitle = courseTitle.replace(/[^a-z0-9а-яё\- ]/gi, '_').replace(/_+/g, '_').trim();
         chrome.downloads.download({
             url: dataUrl,
-            filename: `udemy-course-${courseId}-subtitles.json`,
+            filename: `${safeTitle}_subtitles.${extension}`,
             saveAs: true
         }, (downloadId) => {
             if (chrome.runtime.lastError) {
@@ -190,17 +211,19 @@ async function startDownloadProcess(courseId) {
 
 // Утилита очистки VTT
 function cleanVttContent(vttString) {
+    // В некоторых субтитрах \n или \n\n записан как литерал (экранирован)
+    vttString = vttString.replace(/\\n/g, '\n');
     const lines = vttString.split('\n');
     const seen = new Set();
     const textLines = [];
-    
+
     for (const line of lines) {
         let trimmed = line.trim();
         // Игнорируем пустые, заголовок WEBVTT, номера блоков и таймкоды
         if (!trimmed || trimmed === 'WEBVTT' || trimmed.match(/^\d+$/) || trimmed.match(/[\d:]+\s*-->/)) {
             continue;
         }
-        
+
         // Декодируем базовые HTML сущности
         trimmed = trimmed
             .replace(/&amp;/g, '&')
@@ -208,7 +231,7 @@ function cleanVttContent(vttString) {
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
             .replace(/&#39;/g, "'");
-            
+
         // Избавляемся от тегов вроде <v Name> или <i>
         const noTags = trimmed.replace(/<\/?[^>]+(>|$)/g, "");
 

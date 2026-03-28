@@ -43,6 +43,9 @@ btn.addEventListener('click', async () => {
             throw new Error("Пожалуйста, откройте страницу нужного курса на Udemy!");
         }
 
+        const urlObj = new URL(tab.url);
+        const courseOrigin = urlObj.origin;
+
         console.log("[Popup] Посылаем запрос GET_COURSE_ID в content.js...");
         chrome.tabs.sendMessage(tab.id, { type: 'GET_COURSE_ID' }, (response) => {
             if (chrome.runtime.lastError) {
@@ -57,10 +60,16 @@ btn.addEventListener('click', async () => {
             if (response && response.courseId) {
                 statusDiv.innerText = `Найден курс ID: ${response.courseId}. Отправка команды в фоновый скрипт...`;
                 
+                const formatOpts = document.querySelector('input[name="format"]:checked');
+                const format = formatOpts ? formatOpts.value : 'md';
+
                 // Передаем команду в background.js
                 chrome.runtime.sendMessage({
                     type: 'START_DOWNLOAD',
-                    courseId: response.courseId
+                    format: format,
+                    courseId: response.courseId,
+                    courseTitle: response.courseTitle,
+                    courseOrigin: courseOrigin
                 }, (bgResponse) => {
                     if (chrome.runtime.lastError) {
                         console.error("[Popup] Ошибка связи с background.js:", chrome.runtime.lastError.message);
